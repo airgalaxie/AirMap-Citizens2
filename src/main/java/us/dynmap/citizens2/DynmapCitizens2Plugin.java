@@ -1,6 +1,10 @@
 package us.dynmap.citizens2;
 import java.io.IOException;
+import java.io.InputStream;
+import java.util.Arrays;
+import java.util.EnumMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Level;
@@ -17,8 +21,14 @@ import net.citizensnpcs.api.npc.NPC;
 import net.citizensnpcs.api.npc.NPCRegistry;
 
 import org.bukkit.Location;
+import org.bukkit.World;
 import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.entity.Ambient;
+import org.bukkit.entity.Animals;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.EntityType;
+import org.bukkit.entity.Monster;
+import org.bukkit.entity.WaterMob;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.server.PluginEnableEvent;
@@ -40,11 +50,107 @@ public class DynmapCitizens2Plugin extends JavaPlugin {
     CitizensPlugin citizens;
     private MarkerIcon deficon;
     private MarkerSet npcset;
+    private boolean dynamicMarkerGroups;
+    private final Map<MarkerGroup, MarkerIcon> groupIcons = new EnumMap<MarkerGroup, MarkerIcon>(MarkerGroup.class);
     boolean reload = false;
     
     FileConfiguration cfg;
     
     private Set<String> existingnpcs = new HashSet<String>();
+
+    private static final Set<String> HUMANOID_TYPES = new HashSet<String>(Arrays.asList(
+            "PLAYER", "MANNEQUIN", "ARMOR_STAND", "VILLAGER", "WANDERING_TRADER",
+            "PIGLIN", "PIGLIN_BRUTE", "ZOMBIFIED_PIGLIN", "PILLAGER", "VINDICATOR",
+            "EVOKER", "ILLUSIONER", "WITCH"));
+
+    private static final Set<String> LARGE_SPECIAL_TYPES = new HashSet<String>(Arrays.asList(
+            "ENDER_DRAGON", "WITHER", "WARDEN", "GIANT", "RAVAGER", "ELDER_GUARDIAN",
+            "IRON_GOLEM", "HAPPY_GHAST"));
+
+    private enum MarkerGroup {
+        HUMANOID("humanoid"),
+        ANIMAL("animal"),
+        MONSTER("monster"),
+        LARGE_SPECIAL("large_special"),
+        OTHER("other");
+
+        private final String id;
+
+        MarkerGroup(String id) {
+            this.id = id;
+        }
+    }
+
+    private MarkerGroup classifyNPC(NPC npc) {
+        EntityType type = npc.getCosmeticEntityType();
+        if (type == null) {
+            return MarkerGroup.OTHER;
+        }
+
+        String typeName = type.name();
+        if (LARGE_SPECIAL_TYPES.contains(typeName)) {
+            return MarkerGroup.LARGE_SPECIAL;
+        }
+        if (HUMANOID_TYPES.contains(typeName)) {
+            return MarkerGroup.HUMANOID;
+        }
+
+        Class<? extends Entity> entityClass = type.getEntityClass();
+        if (entityClass != null) {
+            if (Animals.class.isAssignableFrom(entityClass)
+                    || WaterMob.class.isAssignableFrom(entityClass)
+                    || Ambient.class.isAssignableFrom(entityClass)) {
+                return MarkerGroup.ANIMAL;
+            }
+            if (Monster.class.isAssignableFrom(entityClass)) {
+                return MarkerGroup.MONSTER;
+            }
+        }
+        return MarkerGroup.OTHER;
+    }
+
+    private MarkerIcon getNPCIcon(NPC npc) {
+        if (dynamicMarkerGroups) {
+            MarkerIcon icon = groupIcons.get(classifyNPC(npc));
+            if (icon != null) {
+                return icon;
+            }
+        }
+        return deficon;
+    }
+
+    private MarkerIcon registerBundledIcon(String id, String resourcePath) {
+        MarkerIcon icon = markerapi.getMarkerIcon(id);
+        if (icon != null) {
+            return icon;
+        }
+
+        try (InputStream in = getResource(resourcePath)) {
+            if (in == null) {
+                severe("Cannot find bundled marker icon '" + resourcePath + "'");
+                return null;
+            }
+            icon = markerapi.createMarkerIcon(id, id, in);
+            if (icon == null) {
+                severe("Cannot register Dynmap marker icon '" + id + "'");
+            }
+            return icon;
+        } catch (IOException iox) {
+            severe("Cannot load bundled marker icon '" + resourcePath + "': " + iox.getMessage());
+            return null;
+        }
+    }
+
+    private MarkerIcon loadBundledIcons() {
+        MarkerIcon citizensIcon = registerBundledIcon("citizens", "marker/citizens.png");
+        for (MarkerGroup group : MarkerGroup.values()) {
+            MarkerIcon icon = registerBundledIcon("citizens_" + group.id, "marker/" + group.id + ".png");
+            if (icon != null) {
+                groupIcons.put(group, icon);
+            }
+        }
+        return citizensIcon;
+    }
 
     private void processNPC(MarkerSet set, NPC npc) {
         processNPC(set, npc, null);
@@ -53,11 +159,22 @@ public class DynmapCitizens2Plugin extends JavaPlugin {
     private void processNPC(MarkerSet set, NPC npc, Set<String> toremove) {
         UUID uuid = npc.getUniqueId();
         String id = "npc_" + Long.toHexString(uuid.getMostSignificantBits() ^ uuid.getLeastSignificantBits());
-        Entity ent = null;
+        Location loc = null;
         if (npc.isSpawned()) {
-            ent = npc.getEntity();
+            Entity ent = npc.getEntity();
+            if (ent != null) {
+                loc = ent.getLocation();
+            }
         }
-        if (ent == null) {  // If null, see if we need to remove it
+
+        // Citizens despawns NPC entities when their chunk is unloaded. The stored
+        // location remains available and is the position Dynmap should display.
+        if (loc == null) {
+            loc = npc.getStoredLocation();
+        }
+
+        World world = loc == null ? null : loc.getWorld();
+        if (world == null) {  // If null, see if we need to remove it
             if (existingnpcs.contains(id)) {    // Found?
                 Marker m = set.findMarker(id);
                 if (m != null) {
@@ -67,15 +184,23 @@ public class DynmapCitizens2Plugin extends JavaPlugin {
             }
         }
         else {
-            Location loc = ent.getLocation();
+            MarkerIcon icon = getNPCIcon(npc);
             Marker m = set.findMarker(id);
             if (m == null) {
-                m = set.createMarker(id, npc.getName(), false, loc.getWorld().getName(), loc.getX(), loc.getY(), loc.getZ(), deficon, false);
+                m = set.createMarker(id, npc.getName(), false, world.getName(), loc.getX(), loc.getY(), loc.getZ(), icon, false);
+                if (m == null) {
+                    severe("Cannot create Dynmap marker for NPC " + npc.getName() + " (" + uuid + ")");
+                    return;
+                }
                 existingnpcs.add(id);
             }
             else {
-                m.setLocation(loc.getWorld().getName(), loc.getX(), loc.getY(), loc.getZ());
+                existingnpcs.add(id);
+                m.setLocation(world.getName(), loc.getX(), loc.getY(), loc.getZ());
                 m.setLabel(npc.getName());
+                if (!m.getMarkerIcon().getMarkerIconID().equals(icon.getMarkerIconID())) {
+                    m.setMarkerIcon(icon);
+                }
             }
             if (toremove != null) {
                 toremove.remove(id);
@@ -212,10 +337,25 @@ public class DynmapCitizens2Plugin extends JavaPlugin {
         FileConfiguration cfg = getConfig();
         cfg.options().copyDefaults(true);   /* Load defaults, if needed */
         this.saveConfig();  /* Save updates, if needed */
-        deficon = markerapi.getMarkerIcon("offlineuser");
+        MarkerIcon dynmapFallback = markerapi.getMarkerIcon("offlineuser");
+        if (dynmapFallback == null) {
+            dynmapFallback = markerapi.getMarkerIcon("default");
+        }
+        dynamicMarkerGroups = cfg.getBoolean("marker.dynamic-groups", true);
+        groupIcons.clear();
+        MarkerIcon citizensIcon = loadBundledIcons();
+        deficon = citizensIcon != null ? citizensIcon : dynmapFallback;
+        if (deficon == null) {
+            severe("Cannot load marker icon 'citizens', 'offlineuser', or 'default'!");
+            return;
+        }
         npcset = markerapi.getMarkerSet("Citizens2");
         if (npcset == null) {
             npcset = markerapi.createMarkerSet("Citizens2", "NPCs", null, false);
+        }
+        if (npcset == null) {
+            severe("Error creating Dynmap marker set 'Citizens2'!");
+            return;
         }
         getServer().getPluginManager().registerEvents(new OurNPCListener(), this);        
         
