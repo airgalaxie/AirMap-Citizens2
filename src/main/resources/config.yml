@@ -1,9 +1,14 @@
 # AirMap-Citizens2 configuration
 #
+# Both settings are read while the plugin is enabled, so restart the server
+# or the plugin after changing them.
 update:
-  # Seconds between position updates
+  # Seconds between marker position and name updates.
+  # Any value is allowed, values below 2 are raised to 2.
   period: 30.0
 
 marker:
-  # Use a marker matching the Citizens NPC entity group
+  # true:  one bundled icon per NPC type
+  #        (humanoid, animal, monster, large special, other)
+  # false: all NPCs are shown with the same bundled 'citizens' icon
   dynamic-groups: true
