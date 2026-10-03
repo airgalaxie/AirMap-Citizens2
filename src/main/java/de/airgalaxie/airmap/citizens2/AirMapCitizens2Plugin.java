@@ -1,4 +1,4 @@
-package us.dynmap.citizens2;
+package de.airgalaxie.airmap.citizens2;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
@@ -41,15 +41,21 @@ import org.dynmap.markers.MarkerAPI;
 import org.dynmap.markers.MarkerIcon;
 import org.dynmap.markers.MarkerSet;
 
-public class DynmapCitizens2Plugin extends JavaPlugin {
+public class AirMapCitizens2Plugin extends JavaPlugin {
     private static Logger log;
 
-    Plugin dynmap;
+    /* AirMap is based on Dynmap and exposes the same marker API, so both plugins are supported */
+    private static final String[] MAP_PLUGINS = { "AirMap", "dynmap" };
+    private static final String MARKER_SET_ID = "AirMap-Citizens2";
+    private static final String DEFAULT_ICON_ID = "citizens";
+
+    Plugin mapPlugin;
     DynmapCommonAPI api;
     MarkerAPI markerapi;
     CitizensPlugin citizens;
     private MarkerIcon deficon;
     private MarkerSet npcset;
+    private boolean activated = false;
     private boolean dynamicMarkerGroups;
     private final Map<MarkerGroup, MarkerIcon> groupIcons = new EnumMap<MarkerGroup, MarkerIcon>(MarkerGroup.class);
     boolean reload = false;
@@ -120,19 +126,22 @@ public class DynmapCitizens2Plugin extends JavaPlugin {
     }
 
     private MarkerIcon registerBundledIcon(String id, String resourcePath) {
-        MarkerIcon icon = markerapi.getMarkerIcon(id);
-        if (icon != null) {
-            return icon;
-        }
-
         try (InputStream in = getResource(resourcePath)) {
             if (in == null) {
                 severe("Cannot find bundled marker icon '" + resourcePath + "'");
                 return null;
             }
+
+            MarkerIcon icon = markerapi.getMarkerIcon(id);
+            if (icon != null) {
+                /* Refresh with the currently bundled image, so updated files are picked up */
+                icon.setMarkerIconImage(in);
+                return icon;
+            }
+
             icon = markerapi.createMarkerIcon(id, id, in);
             if (icon == null) {
-                severe("Cannot register Dynmap marker icon '" + id + "'");
+                severe("Cannot register marker icon '" + id + "'");
             }
             return icon;
         } catch (IOException iox) {
@@ -142,7 +151,7 @@ public class DynmapCitizens2Plugin extends JavaPlugin {
     }
 
     private MarkerIcon loadBundledIcons() {
-        MarkerIcon citizensIcon = registerBundledIcon("citizens", "marker/citizens.png");
+        MarkerIcon citizensIcon = registerBundledIcon(DEFAULT_ICON_ID, "marker/citizens.png");
         for (MarkerGroup group : MarkerGroup.values()) {
             MarkerIcon icon = registerBundledIcon("citizens_" + group.id, "marker/" + group.id + ".png");
             if (icon != null) {
@@ -168,7 +177,7 @@ public class DynmapCitizens2Plugin extends JavaPlugin {
         }
 
         // Citizens despawns NPC entities when their chunk is unloaded. The stored
-        // location remains available and is the position Dynmap should display.
+        // location remains available and is the position the web map should display.
         if (loc == null) {
             loc = npc.getStoredLocation();
         }
@@ -189,7 +198,7 @@ public class DynmapCitizens2Plugin extends JavaPlugin {
             if (m == null) {
                 m = set.createMarker(id, npc.getName(), false, world.getName(), loc.getX(), loc.getY(), loc.getZ(), icon, false);
                 if (m == null) {
-                    severe("Cannot create Dynmap marker for NPC " + npc.getName() + " (" + uuid + ")");
+                    severe("Cannot create marker for NPC " + npc.getName() + " (" + uuid + ")");
                     return;
                 }
                 existingnpcs.add(id);
@@ -213,6 +222,11 @@ public class DynmapCitizens2Plugin extends JavaPlugin {
         HashSet<String> toremove = new HashSet<String>(existingnpcs);
         if (reg != null) {
             for (NPCRegistry r : reg) {
+                /* Citizens' internal helper NPCs (sit trait chair, animation holder,
+                 * hologram lines) live in the temporary registry and are not shown by /npc list */
+                if (r == CitizensAPI.getTemporaryNPCRegistry()) {
+                    continue;
+                }
                 for (NPC npc : r) {
                     processNPC(npcset, npc, toremove);
                 }
@@ -267,13 +281,22 @@ public class DynmapCitizens2Plugin extends JavaPlugin {
         }
     }
     
+    private static boolean isMapPlugin(String name) {
+        for (String candidate : MAP_PLUGINS) {
+            if (candidate.equalsIgnoreCase(name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private class OurServerListener implements Listener {
         @EventHandler
         public void onPluginEnable(PluginEnableEvent event) {
             Plugin p = event.getPlugin();
             String name = p.getDescription().getName();
-            if(name.equals("dynmap") || name.equals("Essentials")) {
-                if(dynmap.isEnabled() && citizens.isEnabled())
+            if(isMapPlugin(name) || name.equals("Essentials")) {
+                if(mapPlugin.isEnabled() && citizens.isEnabled())
                     activate();
             }
         }
@@ -282,13 +305,19 @@ public class DynmapCitizens2Plugin extends JavaPlugin {
     public void onEnable() {
         info("initializing");
         PluginManager pm = getServer().getPluginManager();
-        /* Get dynmap */
-        dynmap = pm.getPlugin("dynmap");
-        if(dynmap == null) {
-            severe("Cannot find dynmap!");
+        /* AirMap is preferred, Dynmap is supported through the same marker API */
+        for (String name : MAP_PLUGINS) {
+            Plugin found = pm.getPlugin(name);
+            if (found != null) {
+                mapPlugin = found;
+                break;
+            }
+        }
+        if(mapPlugin == null) {
+            severe("Cannot find AirMap or Dynmap!");
             return;
         }
-        api = (DynmapCommonAPI) dynmap; /* Get API */
+        api = (DynmapCommonAPI) mapPlugin; /* Both plugins implement the Dynmap common API */
         /* Get Citizens */
         Plugin p = pm.getPlugin("Citizens");
         if(p == null) {
@@ -300,30 +329,78 @@ public class DynmapCitizens2Plugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new OurServerListener(), this);        
 
         /* If both enabled, activate */
-        if(dynmap.isEnabled() && citizens.isEnabled()) {
+        if(mapPlugin.isEnabled() && citizens.isEnabled()) {
             activate();
-            try { 
-                MetricsLite ml = new MetricsLite(this);
-                ml.start();
-            } catch (IOException iox) {
-            }
         }
     }
 
     private class MarkerUpdate implements Runnable {
         public void run() {
-            if (!stop) {
-                updateAllNPCs(npcset);
-                getServer().getScheduler().scheduleSyncDelayedTask(DynmapCitizens2Plugin.this, this, updperiod);
+            try {
+                if (stop) {
+                    return;
+                }
+                /* Marker set and icons are stale after a map reload - get them again */
+                if (refreshMarkerApi()) {
+                    updateAllNPCs(npcset);
+                }
+            } catch (Throwable t) {
+                /* Never let the update chain die silently - it keeps running for the next period */
+                getLogger().log(Level.SEVERE, "Error updating NPC markers", t);
+            } finally {
+                if (!stop) {
+                    getServer().getScheduler().scheduleSyncDelayedTask(AirMapCitizens2Plugin.this, this, updperiod);
+                }
             }
         }
     }
+
+    /* The map plugin recreates its marker objects on reload, so set and icons have to be fetched again */
+    private boolean refreshMarkerApi() {
+        MarkerAPI currentapi = api.getMarkerAPI();
+        if (currentapi == null) {
+            severe("Error loading marker API!");
+            return false;
+        }
+        if (currentapi.getMarkerSet(MARKER_SET_ID) == npcset && currentapi.getMarkerIcon(DEFAULT_ICON_ID) == deficon) {
+            return true;
+        }
+
+        markerapi = currentapi;
+        groupIcons.clear();
+        MarkerIcon citizensIcon = loadBundledIcons();
+        if (citizensIcon != null) {
+            deficon = citizensIcon;
+        }
+        if (deficon == null) {
+            severe("Cannot load marker icon 'citizens', 'offlineuser', or 'default'!");
+            return false;
+        }
+        MarkerSet currentset = markerapi.getMarkerSet(MARKER_SET_ID);
+        if (currentset == null) {
+            currentset = markerapi.createMarkerSet(MARKER_SET_ID, "NPCs", null, false);
+        }
+        if (currentset == null) {
+            severe("Error creating marker set '" + MARKER_SET_ID + "'!");
+            return false;
+        }
+        if (currentset != npcset) {
+            /* Marker set was reloaded - its markers are gone and get registered again */
+            npcset = currentset;
+            existingnpcs.clear();
+        }
+        info("Map markers were reloaded, NPC marker icons re-registered");
+        return true;
+    }
     
     private void activate() {
+        if (activated) {   /* A later PluginEnableEvent must not initialize a second time */
+            return;
+        }
         /* Now, get markers API */
         markerapi = api.getMarkerAPI();
         if(markerapi == null) {
-            severe("Error loading Dynmap marker API!");
+            severe("Error loading marker API!");
             return;
         }
             
@@ -337,26 +414,33 @@ public class DynmapCitizens2Plugin extends JavaPlugin {
         FileConfiguration cfg = getConfig();
         cfg.options().copyDefaults(true);   /* Load defaults, if needed */
         this.saveConfig();  /* Save updates, if needed */
-        MarkerIcon dynmapFallback = markerapi.getMarkerIcon("offlineuser");
-        if (dynmapFallback == null) {
-            dynmapFallback = markerapi.getMarkerIcon("default");
+        MarkerIcon builtinFallback = markerapi.getMarkerIcon("offlineuser");
+        if (builtinFallback == null) {
+            builtinFallback = markerapi.getMarkerIcon("default");
         }
         dynamicMarkerGroups = cfg.getBoolean("marker.dynamic-groups", true);
         groupIcons.clear();
         MarkerIcon citizensIcon = loadBundledIcons();
-        deficon = citizensIcon != null ? citizensIcon : dynmapFallback;
+        deficon = citizensIcon != null ? citizensIcon : builtinFallback;
         if (deficon == null) {
             severe("Cannot load marker icon 'citizens', 'offlineuser', or 'default'!");
             return;
         }
-        npcset = markerapi.getMarkerSet("Citizens2");
+        npcset = markerapi.getMarkerSet(MARKER_SET_ID);
         if (npcset == null) {
-            npcset = markerapi.createMarkerSet("Citizens2", "NPCs", null, false);
+            npcset = markerapi.createMarkerSet(MARKER_SET_ID, "NPCs", null, false);
         }
         if (npcset == null) {
-            severe("Error creating Dynmap marker set 'Citizens2'!");
+            severe("Error creating marker set '" + MARKER_SET_ID + "'!");
             return;
         }
+        /* Drop markers left over by an earlier run, so every NPC is registered again from scratch */
+        for (Marker m : new HashSet<Marker>(npcset.getMarkers())) {
+            if (m.getMarkerID().startsWith("npc_")) {
+                m.deleteMarker();
+            }
+        }
+        existingnpcs.clear();
         getServer().getPluginManager().registerEvents(new OurNPCListener(), this);        
         
         /* Set up update job - based on period */
@@ -364,13 +448,17 @@ public class DynmapCitizens2Plugin extends JavaPlugin {
         if(per < 2.0) per = 2.0;
         updperiod = (long)(per*20.0);
         stop = false;
+        /* Register all markers once at startup instead of waiting for the first scheduled run */
+        updateAllNPCs(npcset);
         getServer().getScheduler().scheduleSyncDelayedTask(this, new MarkerUpdate(), 5*20);
 
+        activated = true;
         info("version " + this.getDescription().getVersion() + " is activated");
     }
 
     public void onDisable() {
         stop = true;
+        activated = false;
     }
 
 }

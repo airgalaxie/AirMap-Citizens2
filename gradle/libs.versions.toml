@@ -1,9 +1,11 @@
 [versions]
-pluginVersion = "0.41"
+pluginVersion = "0.42"
 apiVersion = "26.3"
+# AirMap and Dynmap share the same marker API, so the plugin compiles against Dynmap Core API 3.8
 dynmapCoreApi = "3.8"
 spigotApi = "26.3-R0.1-SNAPSHOT"
 citizensApi = "2.0.44-SNAPSHOT"
+javaRelease = "17"
 
 [libraries]
 dynmapCoreApi = { module = "us.dynmap:DynmapCoreAPI", version.ref = "dynmapCoreApi" }

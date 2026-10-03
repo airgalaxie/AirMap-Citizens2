@@ -2,7 +2,7 @@ plugins {
     java
 }
 
-group = "us.dynmap"
+group = "de.airgalaxie.airmap"
 version = libs.versions.pluginVersion.get()
 
 repositories {
@@ -18,9 +18,8 @@ dependencies {
     implementation(libs.citizensApi)
 }
 
-java {
-    sourceCompatibility = JavaVersion.VERSION_1_8
-    targetCompatibility = JavaVersion.VERSION_1_8
+tasks.compileJava {
+    options.release.set(libs.versions.javaRelease.get().toInt())
 }
 
 layout.buildDirectory.set(layout.projectDirectory.dir("target"))

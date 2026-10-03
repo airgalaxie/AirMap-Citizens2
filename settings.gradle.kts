@@ -1,1 +1,1 @@
-rootProject.name = "Dynmap-Citizens2"
+rootProject.name = "AirMap-Citizens2"

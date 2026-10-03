@@ -1,0 +1,12 @@
+AirMap-Citizens2
+Copyright 2026 the AirMap-Citizens2 contributors
+
+This product includes software developed by third parties:
+
+- Dynmap-Citizens2, the original plugin, written by mikeprimm.
+  AirMap-Citizens2 is based on it and keeps its marker handling approach.
+- Dynmap / AirMap, which provide the marker API this plugin builds on.
+  AirMap is an independent project based on Dynmap, which in turn is the
+  original web map project by mikeprimm.
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
