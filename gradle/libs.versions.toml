@@ -5,7 +5,7 @@ apiVersion = "26.3"
 dynmapCoreApi = "3.8"
 spigotApi = "26.3-R0.1-SNAPSHOT"
 citizensApi = "2.0.44-SNAPSHOT"
-javaRelease = "17"
+javaRelease = "25"
 
 [libraries]
 dynmapCoreApi = { module = "us.dynmap:DynmapCoreAPI", version.ref = "dynmapCoreApi" }
